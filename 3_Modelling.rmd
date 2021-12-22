@@ -1,0 +1,121 @@
+---
+title: "Modelling_1006"
+author: "Yingdong Yang"
+date: "10/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tree)
+library(randomForest)
+source("DataAnalyticsFunctions.R")
+library(nnet)
+```
+
+```{r}
+## we combined our cleaned datasets(TV&Films ratings and Stock) using SQL and named it "finaldata_1006.csv" 
+data2<- read.csv("finaldata_1006.csv")
+data2<-data2[-c(1,2),]
+set.seed(100)
+sample <- sample.int(n = nrow(data2), size = floor(.90*nrow(data2)), replace = F)
+train <- data2[sample, ]
+test  <- data2[-sample, ]
+netflix.price=read.csv("NFLX2013_week_close.csv")
+netflix.price=netflix.price[-c(1,2),]
+```
+
+```{r}
+dropcol<-c("week","alpha")
+train<-train[,!names(train)%in%dropcol]
+test<-test[,!names(train)%in%dropcol]
+train<-data.frame(sapply(train,as.integer))
+test<-data.frame(sapply(test,as.integer))
+test$Alpha_class <- as.factor(test$Alpha_class)
+train$Alpha_class <- as.factor(train$Alpha_class)
+```
+
+```{r}
+##K-fold for tree and regression
+# set reference for multinomial model
+train$Alpha_class <- relevel(train$Alpha_class, ref = '1')
+
+nfold <- 10
+n <- nrow(data2)
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+OOS <- data.frame(multinom=rep(NA,nfold),
+                    tree=rep(NA,nfold),
+                  rf=rep(NA,nfold)) 
+for(k in 1:nfold){
+  train1 <- which(foldid!=k) # train on all but fold `k'
+
+  model.tree <- tree(Alpha_class~ ., data=train, subset=train1)
+  model.rf<-randomForest(Alpha_class~ ., data=train, subset=train1,  na.action=na.roughfix)
+  model.multinom <- multinom(Alpha_class ~ ., data = train, subset = train1)
+
+  pred.tree<- predict(model.tree, newdata=train[-train1,],"class")
+  pred.rf<-predict(model.rf,newdata=train[-train1,],"class")
+  pred.multinom <- predict(model.multinom, newdata = train[-train1,], "class")
+  
+  tab_tree <- table(train[-train1,]$Alpha_class, pred.tree)
+  tab_rf <- table(train[-train1,]$Alpha_class, pred.rf)
+  tab_multinom <- table(train[-train1,]$Alpha_class, pred.multinom)
+  acc_tree=round((sum(diag(tab_tree))/sum(tab_tree)),5)
+  acc_rf=round((sum(diag(tab_rf))/sum(tab_rf)),5)
+  acc_multinom <- round((sum(diag(tab_multinom))/sum(tab_multinom)),5)
+  OOS$tree[k] <- acc_tree
+  OOS$tree[k]
+  OOS$rf[k]<-acc_rf
+  OOS$rf[k]
+  OOS$multinom[k] <- acc_multinom
+  OOS$multinom[k]
+  
+
+  print(paste("Iteration",k,"of",nfold,"(thank you for your patience)"))
+}
+
+par( mar=  c(8, 4, 4, 2) + 0.6 )
+barplot(colMeans(OOS), las=2,xpd=FALSE, ylim=c(0,.9) , xlab="", ylab = bquote( "Average accuracy "))
+```
+
+
+```{r}
+##random forest wins
+model.rf_final<-randomForest(Alpha_class~ ., data=train)
+  
+
+```
+
+
+```{r}
+pred.rf_final=predict(model.rf,newdata=test,"class")
+tab_rf_final <- table(test$Alpha_class, pred.rf_final)
+acc_rf_final <- round((sum(diag(tab_rf_final))/sum(tab_rf_final)),5)
+```
+
+```{r}
+##Importance visualization
+model.importance=t(model.rf$importance)
+model.importance=t(model.importance[,order(model.importance,decreasing = TRUE)])
+par( mar=  c(8, 4, 4, 2) + 0.6 )
+barplot(model.importance,las=2,xpd=FALSE, ylim=c(0,25) , xlab="")
+```
+
+```{r}
+pred.rf_overall=predict(model.rf,newdata=data2,"class")
+tab_rf_overall <- table(data2$Alpha_class, pred.rf_overall)
+acc_rf_overall <- round((sum(diag(tab_rf_overall))/sum(tab_rf_overall)),5)
+prediction_true_index=(data2$Alpha_class==pred.rf_overall)
+prediction_true=netflix.price[prediction_true_index,]
+```
+
+
+```{r}
+ggplot()+
+geom_point(data=netflix.price, aes(x=week,y=Close),color='red')+
+geom_point(data=prediction_true,aes(x=week,y=Close))+
+  ylab('Netflix Stock Price (FridayClose)')+
+  xlab('Week (from 2013.01.14)')
+
+```
+
